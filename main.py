@@ -3,13 +3,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
-from models import CRMLP
+from models import MLP, RMLP, CMLP
 from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import time
 from torch.utils.tensorboard import SummaryWriter  # Import SummaryWriter
+from torchviz import make_dot
 
 def write_grad_flow(named_parameters, writer):
     '''Plots the gradients flowing through different layers in the net during training.
@@ -23,6 +22,7 @@ def write_grad_flow(named_parameters, writer):
     for n, p in named_parameters:
         if(p.requires_grad) and ("bias" not in n):
             layers.append(n)
+            #print(n)
             ave_grads.append(p.grad.abs().mean().item())
             max_grads.append(p.grad.abs().max().item())
             writer.add_scalar(f'grad_average/{n}', p.grad.abs().mean().item(), counter)
@@ -36,11 +36,18 @@ def train(epoch: int, model: nn.Module, train_loader: DataLoader, criterion: nn.
     for batch_idx, (data, target) in enumerate(train_loader):
         optimizer.zero_grad()
         start_time = time.time()
+
         output = model(data)
+        
         end_time = time.time()
         loss = criterion(output, target)
         loss.backward()
-        write_grad_flow(model.named_parameters(), writer)
+
+        #make_dot(output, params=dict(model.named_parameters())).render("torchviz", format="png")
+        #if batch_idx==50:
+        #    raise ValueError()
+        #raise ValueError()
+        #write_grad_flow(model.named_parameters(), writer)
         optimizer.step()
         
         # Log training loss to TensorBoard
@@ -78,7 +85,7 @@ def main() -> None:
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=5000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=2, metavar='N',
+    parser.add_argument('--epochs', type=int, default=5, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.0003, metavar='LR',
                         help='learning rate (default: 0.01)')
@@ -100,7 +107,7 @@ def main() -> None:
     # Initialize TensorBoard writer
     writer = SummaryWriter()
 
-    model = MLP()
+    model = RMLP()
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)

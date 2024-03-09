@@ -5,20 +5,9 @@ import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.init as init
 import torch.nn.functional as F
-import time
 
-# UNUSED
-class STEFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input):
-        # Perform the non-differentiable operation in the forward pass
-        # input here is expected to be the selected_nodes tensor
-        return input
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # In the backward pass, we simply pass the gradients through unchanged
-        return grad_output.clone()
+from torch.profiler import profile, record_function, ProfilerActivity
+from torch.utils.tensorboard import SummaryWriter
 
 class SparseMoeBlock(nn.Module):
     """
@@ -47,9 +36,11 @@ class SparseMoeBlock(nn.Module):
         # gating
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
 
-    def forward(self, 
-                hidden_states: torch.Tensor,
-                experts: nn.ModuleList) -> torch.Tensor:
+        self.experts = nn.ModuleList(           
+            [nn.Linear(self.hidden_dim, self.hidden_dim, bias=False) for _ in range(self.num_experts)]
+        )
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """ """
         batch_size, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -78,7 +69,7 @@ class SparseMoeBlock(nn.Module):
 
         # Loop over all available experts in the model and perform the computation on each expert
         for expert_idx in range(self.num_experts):
-            expert_layer = experts[expert_idx]
+            expert_layer = self.experts[expert_idx]
             idx, top_x = torch.where(expert_mask[expert_idx])
 
             if top_x.shape[0] == 0:
@@ -107,63 +98,21 @@ class SparseMoeBlock(nn.Module):
             batch_size, hidden_dim
         )
         return final_hidden_states, router_logits
-
-class RouterLinear(nn.Module):
-    r"""Applies a linear transformation to the incoming data: :math:`y = xA^T + b`.
-
-    Args:
-        in_features: size of each input sample
-        out_features: size of each output sample
-        bias: If set to ``False``, the layer will not learn an additive bias.
-            Default: ``True``
-
-    Shape:
-        - Input: :math:`(*, H_{in})` where :math:`*` means any number of
-          dimensions including none and :math:`H_{in} = \text{in\_features}`.
-        - Output: :math:`(*, H_{out})` where all but the last dimension
-          are the same shape as the input and :math:`H_{out} = \text{out\_features}`.
-    """
-
-    def __init__(self, 
-                 in_features: int,
-                 out_features: int,
-                 hidden_dim: int, 
-                 top_k: int = 1,
-                 max_routing: int = 1,
-                 num_experts: int = 1,
-                 score_scale_factor: float = 0.75,
-                 device=None, 
-                 dtype=None) -> None:
-        
-        factory_kwargs = {'device': device, 'dtype': dtype}
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.hidden_dim = hidden_dim
-        self.top_k = top_k
-        self.max_routing = max_routing
-        self.num_experts = num_experts
-
-        self.input_layer = nn.Linear(in_features, hidden_dim)
-        self.output_layer = nn.Linear(hidden_dim, out_features)
-
-        self.experts = nn.ModuleList(           
-            [nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim, bias=False), nn.ReLU()) for _ in range(self.num_experts)]
-        )
-
-        self.moeblock = SparseMoeBlock(self.hidden_dim,
-                                       self.num_experts,
-                                       self.top_k,
-                                       score_scale_factor)
-
-    def forward(self, input: Tensor) -> Tensor:
-        
-        x = torch.relu(self.input_layer(input))
-        for i in range(self.max_routing):
-            x, router_logits = self.moeblock(x, self.experts)
-        
-        result = self.output_layer(x)
-        
-        return result
     
+writer = SummaryWriter("runs/profiling_sparsemoe")
+model = SparseMoeBlock(8, 4, 2, 0.75)
+inp = torch.randn(1,8)
+
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], 
+            record_shapes=True) as prof:
+   with record_function("model_forward"):
+    output, select = model(inp)
+
+profiling_results = prof.key_averages().table(sort_by="cpu_time_total", row_limit=10)
+
+writer.add_text("Profiling Results forward 1", profiling_results)
+
+prof.export_chrome_trace("trace.json")  # Export the trace to a file
+writer.close()
+
 
