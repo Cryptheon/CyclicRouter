@@ -92,8 +92,11 @@ class SparseMoeBlock(nn.Module):
             # the current expert. We need to make sure to multiply the output hidden
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x_list].reshape(-1, hidden_dim)
+            # Necessary for CNNs
+            B, _ = current_state.shape
+            current_state = current_state.view(B, 16, 16, 16)
             current_hidden_states = (
-                expert_layer(current_state)
+                expert_layer(current_state).view(B, -1)
                 * routing_weights[top_x_list, idx_list, None]
                 * self.score_scale_factor
             )
